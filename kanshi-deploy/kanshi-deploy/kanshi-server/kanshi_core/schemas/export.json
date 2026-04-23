@@ -1,0 +1,16 @@
+{
+    "$id": "https://kanshi.net/schemas/export.v0.json",
+	"$schema": "http://json-schema.org/draft-04/schema#",
+	"title": "Export",
+	"description": "The Export model that is used by Kanshi",
+	"type": "object",
+    "required": ["buckets"],
+	"properties": {
+        "buckets": {
+            "type": "array",
+            "items": {
+                "$ref": "#/definitions/Bucket"
+            }
+        }
+    }
+}

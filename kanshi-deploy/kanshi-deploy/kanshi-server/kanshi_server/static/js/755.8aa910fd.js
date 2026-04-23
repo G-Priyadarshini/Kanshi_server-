@@ -1,0 +1,2 @@
+"use strict";(self["webpackChunkkanshi_webui"]=self["webpackChunkkanshi_webui"]||[]).push([[755],{755(n,s,a){a.r(s),a.d(s,{default:()=>c});var e=function(){var n=this;n._self._c;return n._m(0)},t=[function(){var n=this,s=n._self._c;return s("div",[s("h3",[n._v("Woops, this page was not found!")]),s("p",{staticClass:"mb-0"},[n._v("Try navigating back where you came from.")])])}];const u={name:"NotFound"},i=u;var r=a(81656),o=(0,r.A)(i,e,t,!1,null,null,null);const c=o.exports}}]);
+//# sourceMappingURL=755.8aa910fd.js.map

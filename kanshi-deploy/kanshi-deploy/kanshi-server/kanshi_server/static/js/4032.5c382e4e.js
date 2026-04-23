@@ -1,0 +1,2 @@
+"use strict";(self["webpackChunkkanshi_webui"]=self["webpackChunkkanshi_webui"]||[]).push([[4032],{14032(e,n,s){s.r(n),s.d(n,{default:()=>a});var t=function(){var e=this;e._self._c;return e._m(0)},i=[function(){var e=this,n=e._self._c;return n("div",[n("h3",[e._v("Developer zone")]),e._v("Just some tools to aid in development and debugging."),n("p",[e._v("Nothing to see here right now...")])])}];const u={name:"kanshi-dev"},o=u;var l=s(81656),r=(0,l.A)(o,t,i,!1,null,null,null);const a=r.exports}}]);
+//# sourceMappingURL=4032.5c382e4e.js.map
