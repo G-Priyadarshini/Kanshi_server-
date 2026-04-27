@@ -1,8 +1,9 @@
 ﻿# Kanshi Task Installer
 # Run ONCE on the employee machine as Administrator.
-# Creates TWO scheduled tasks:
+# Creates THREE scheduled tasks:
 #   1. KanshiAgent       - starts the recording agent at every login (silent)
 #   2. KanshiDailyReport - sends encrypted daily report to admin at 11 PM
+#   3. KanshiWindowCapture - captures active window usage hourly
 
 $ServerUrl = "http://192.168.1.133:5700/api/reports/upload"
 
@@ -43,3 +44,19 @@ Write-Host "[OK] KanshiDailyReport created - sends report daily at 11:00 PM"
 Write-Host "     Server: $ServerUrl"
 Write-Host ""
 Write-Host "Test immediately: Start-ScheduledTask -TaskName 'KanshiDailyReport'"
+
+# Task 3: KanshiWindowCapture - capture active window/app usage hourly
+$windowScript = Join-Path $ScriptDir "capture_windows.py"
+$existing = Get-ScheduledTask -TaskName "KanshiWindowCapture" -ErrorAction SilentlyContinue
+if ($existing) { Unregister-ScheduledTask -TaskName "KanshiWindowCapture" -Confirm:$false }
+
+Register-ScheduledTask -TaskName "KanshiWindowCapture" -Principal $Principal `
+    -Action (New-ScheduledTaskAction -Execute $PythonW -Argument "`"$windowScript`" --duration 3300 --interval 1000" -WorkingDirectory $ScriptDir) `
+    -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration (New-TimeSpan -Days 365)) `
+    -Settings (New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 0) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)) | Out-Null
+
+Write-Host "[OK] KanshiWindowCapture created - captures windows hourly"
+Write-Host "     Script: $windowScript"
+Write-Host "     First run: in 2 minutes, then every 1 hour for 365 days"
+Write-Host ""
+Write-Host "Test immediately: Start-ScheduledTask -TaskName 'KanshiWindowCapture'"

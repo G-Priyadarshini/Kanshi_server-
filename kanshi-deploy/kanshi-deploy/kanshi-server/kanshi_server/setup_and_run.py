@@ -4,7 +4,7 @@ import os
 import platform
 import subprocess
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from collections import defaultdict
 from cryptography.fernet import Fernet
 
@@ -46,6 +46,17 @@ SCRIPT_PATH = Path(__file__).resolve()
 
 def load_key() -> bytes:
     return KEY_FILE.read_text(encoding="utf-8").strip().encode()
+
+
+def _local_date_to_utc_range(target_date: str) -> tuple[str, str]:
+    local_date = date.fromisoformat(target_date)
+    local_tz = datetime.now().astimezone().tzinfo
+    start_local = datetime(local_date.year, local_date.month, local_date.day, tzinfo=local_tz)
+    end_local = start_local + timedelta(days=1)
+    return (
+        start_local.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"),
+        end_local.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f"),
+    )
 
 
 def scan_live_reports() -> list[dict]:
@@ -158,11 +169,12 @@ def encrypt_report():
             event_count = 0
 
             for bucket_id, name, btype in buckets:
+                start_utc, end_utc = _local_date_to_utc_range(date_str)
                 cursor.execute(
                     "SELECT timestamp, duration, datastr FROM eventmodel "
                     "WHERE bucket_id = ? AND timestamp >= ? AND timestamp < ? "
                     "ORDER BY timestamp",
-                    (bucket_id, date_str, next_str)
+                    (bucket_id, start_utc, end_utc)
                 )
                 rows = cursor.fetchall()
                 if not rows:
@@ -347,8 +359,10 @@ def decrypt_report(emp_id, target_date, open_excel=True):
 
     from datetime import datetime as _dt
 
-    date_start = target_date
-    date_end = str(date.fromisoformat(target_date) + timedelta(days=1))
+    start_utc, end_utc = _local_date_to_utc_range(target_date)
+
+    _day_start_ts = datetime.fromisoformat(start_utc).timestamp()
+    _day_end_ts = datetime.fromisoformat(end_utc).timestamp()
 
     # Helper to merge overlapping time ranges and return total duration
     def _merge_ranges(ranges):
@@ -375,7 +389,7 @@ def decrypt_report(emp_id, target_date, open_excel=True):
             "SELECT timestamp, duration, datastr FROM eventmodel "
             "WHERE bucket_id = ? AND timestamp >= ? AND timestamp < ? "
             "ORDER BY timestamp",
-            (bucket_id, date_start, date_end)
+            (bucket_id, start_utc, end_utc)
         )
         rows = cursor.fetchall()
         if not rows:
@@ -400,8 +414,14 @@ def decrypt_report(emp_id, target_date, open_excel=True):
                     active_ranges.append((start_ts, end_ts, dur))
                 else:
                     afk_ranges.append((start_ts, end_ts, dur))
-            elif data.get("app"):
-                app_durations[data["app"]] += dur
+            else:
+                app_name = data.get("app")
+                if not app_name or app_name.lower() == "unknown":
+                    title = data.get("title", "").strip()
+                    if title:
+                        app_name = title.rsplit(" - ", 1)[-1].strip()
+                if app_name:
+                    app_durations[app_name] += dur
 
     # Merge overlapping intervals for accurate totals
     total_afk = _merge_ranges(afk_ranges)
@@ -811,10 +831,6 @@ def collect_and_send_report(
         # the most events in this day's window — prevents the same clock-second
         # being counted for different apps across buckets → totals > 24 h.
         from collections import defaultdict as _ddbkts
-        from datetime import datetime as _dt2_pre
-        _ls_pre = _dt2_pre.strptime(target_date, "%Y-%m-%d")
-        _ds_pre = _dt2_pre.utcfromtimestamp(_ls_pre.timestamp()).strftime("%Y-%m-%dT%H:%M:%S")
-        _de_pre = _dt2_pre.utcfromtimestamp((_ls_pre + timedelta(days=1)).timestamp()).strftime("%Y-%m-%dT%H:%M:%S")
         _type_map = _ddbkts(list)
         for _b in buckets:
             _type_map[_b[2]].append(_b)
@@ -824,11 +840,12 @@ def collect_and_send_report(
                 deduped.extend(_blist)
             else:
                 _best, _best_n = None, -1
+                start_utc, end_utc = _local_date_to_utc_range(target_date)
                 for _b in _blist:
                     cursor.execute(
                         "SELECT COUNT(*) FROM eventmodel "
                         "WHERE bucket_id = ? AND timestamp >= ? AND timestamp < ?",
-                        (_b[0], _ds_pre, _de_pre),
+                        (_b[0], start_utc, end_utc),
                     )
                     _n = cursor.fetchone()[0]
                     if _n > _best_n:
@@ -837,15 +854,10 @@ def collect_and_send_report(
                     deduped.append(_best)
         buckets = deduped
 
-        # Convert local midnight to UTC for correct DB querying.
-        # .timestamp() on a naive datetime uses local timezone → correct POSIX.
-        from datetime import datetime as _dt2
-        _local_start  = _dt2.strptime(target_date, "%Y-%m-%d")
-        _local_end    = _local_start + timedelta(days=1)
-        _day_start_ts = _local_start.timestamp()
-        _day_end_ts   = _local_end.timestamp()
-        date_start    = _dt2.utcfromtimestamp(_day_start_ts).strftime("%Y-%m-%dT%H:%M:%S")
-        date_end      = _dt2.utcfromtimestamp(_day_end_ts).strftime("%Y-%m-%dT%H:%M:%S")
+        start_utc, end_utc = _local_date_to_utc_range(target_date)
+
+        _day_start_ts = datetime.fromisoformat(start_utc).timestamp()
+        _day_end_ts = datetime.fromisoformat(end_utc).timestamp()
 
         afk_ranges = []
         active_ranges = []
@@ -858,7 +870,7 @@ def collect_and_send_report(
                 "SELECT timestamp, duration, datastr FROM eventmodel "
                 "WHERE bucket_id = ? AND timestamp >= ? AND timestamp < ? "
                 "ORDER BY timestamp",
-                (bucket_id, date_start, date_end),
+                (bucket_id, start_utc, end_utc),
             )
             rows = cursor.fetchall()
             if not rows:
@@ -899,6 +911,7 @@ def collect_and_send_report(
         # Automatically adapts to any shift (day, night, late evening).
         # Excludes overnight idle and time before/after the employee was working.
         all_app_times = [t for rngs in app_ranges.values() for t in rngs]
+        print(f"[DEBUG] all_app_times = {all_app_times}, _day_start_ts defined: {'_day_start_ts' in locals()}")
         if all_app_times:
             _session_start = min(s for s, e in all_app_times)
             _session_end   = max(e for s, e in all_app_times)
