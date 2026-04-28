@@ -28,6 +28,38 @@ BUCKET_NAME = f"kanshi-watcher-window_{HOSTNAME}"
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
+# ─── Define Windows API function signatures properly ────────────────────────
+# This is necessary for ctypes to properly call these functions
+try:
+    # GetWindowTextLengthW(HWND) -> int
+    user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    
+    # GetWindowTextW(HWND, LPWSTR, int) -> int
+    user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    
+    # GetForegroundWindow() -> HWND
+    user32.GetForegroundWindow.argtypes = []
+    user32.GetForegroundWindow.restype = ctypes.c_void_p
+    
+    # GetWindowThreadProcessId(HWND, LPDWORD) -> DWORD
+    user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+    user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
+    
+    # Kernel32 functions
+    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_bool, ctypes.c_ulong]
+    kernel32.OpenProcess.restype = ctypes.c_void_p
+    
+    kernel32.QueryFullProcessImageNameW.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_ulong)]
+    kernel32.QueryFullProcessImageNameW.restype = ctypes.c_bool
+    
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    kernel32.CloseHandle.restype = ctypes.c_bool
+    
+except Exception as e:
+    logging.warning(f"Warning: Could not define all API signatures: {e}")
+
 def extract_app_name_from_title(title: str) -> str:
     """Extract app name from window title."""
     if not title or not isinstance(title, str):
@@ -158,8 +190,8 @@ def ensure_bucket_exists(conn, cursor):
     cursor.execute("SELECT rowid FROM bucketmodel WHERE id = ?", (BUCKET_NAME,))
     return cursor.fetchone()[0]
 
-def capture_windows(duration=300, interval=1000):
-    """Capture active windows and write to database."""
+def capture_windows(duration=300, interval=1000, snapshot_interval=60):
+    """Capture active windows with periodic snapshots."""
     if not DB_PATH.exists():
         logging.error(f"Database not found: {DB_PATH}")
         return 1
@@ -169,71 +201,35 @@ def capture_windows(duration=300, interval=1000):
         cursor = conn.cursor()
         bucket_id = ensure_bucket_exists(conn, cursor)
         
-        logging.info(f"Starting capture for {duration}s")
+        logging.info(f"Starting capture for {duration}s with {snapshot_interval}s snapshots")
         start_time = time.time()
-        last_app = None
-        last_title = ""
-        last_ts = None
-        last_rowid = None
+        last_snapshot_time = start_time
         event_count = 0
         
         while (time.time() - start_time) < duration:
-            app_name, window_title = get_active_window()
-            now = datetime.now(timezone.utc)
+            current_time = time.time()
             
-            # Debug logging
-            if event_count % 10 == 0:
-                logging.info(f"Captured: app={app_name}, title={window_title[:60] if window_title else 'EMPTY'}")
-
-            if last_app is None:
-                last_app = app_name
-                last_title = window_title
-                last_ts = now
-                data = {"app": last_app, "title": last_title}
+            # Check if it's time for a periodic snapshot
+            if (current_time - last_snapshot_time) >= snapshot_interval:
+                app_name, window_title = get_active_window()
+                now = datetime.now(timezone.utc)
+                data = {"app": app_name, "title": window_title}
+                
                 cursor.execute(
                     "INSERT INTO eventmodel (bucket_id, timestamp, duration, datastr) VALUES (?, ?, ?, ?)",
-                    (bucket_id, _format_timestamp(last_ts), 0, json.dumps(data))
+                    (bucket_id, _format_timestamp(now), snapshot_interval, json.dumps(data))
                 )
-                last_rowid = cursor.lastrowid
                 conn.commit()
                 event_count += 1
-            elif app_name != last_app:
-                duration_secs = int((now - last_ts).total_seconds())
-                if duration_secs <= 0:
-                    duration_secs = 1
-                cursor.execute(
-                    "UPDATE eventmodel SET duration = ? WHERE rowid = ?",
-                    (duration_secs, last_rowid)
-                )
-                conn.commit()
-
-                last_app = app_name
-                last_title = window_title
-                last_ts = now
-                data = {"app": last_app, "title": last_title}
-                cursor.execute(
-                    "INSERT INTO eventmodel (bucket_id, timestamp, duration, datastr) VALUES (?, ?, ?, ?)",
-                    (bucket_id, _format_timestamp(last_ts), 0, json.dumps(data))
-                )
-                last_rowid = cursor.lastrowid
-                conn.commit()
-                event_count += 1
+                last_snapshot_time = current_time
+                
+                if event_count % 10 == 0:
+                    logging.info(f"Snapshot #{event_count}: app={app_name}, title={window_title[:60] if window_title else 'EMPTY'}")
 
             time.sleep(interval / 1000.0)
 
-        if last_rowid is not None and last_ts is not None:
-            now = datetime.now(timezone.utc)
-            duration_secs = int((now - last_ts).total_seconds())
-            if duration_secs <= 0:
-                duration_secs = 1
-            cursor.execute(
-                "UPDATE eventmodel SET duration = ? WHERE rowid = ?",
-                (duration_secs, last_rowid)
-            )
-            conn.commit()
-
         conn.close()
-        logging.info(f"Recorded {event_count} events")
+        logging.info(f"Recorded {event_count} snapshot events")
         return 0
     except Exception as e:
         logging.error(f"Fatal error: {e}")
@@ -244,5 +240,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration", type=int, default=300)
     parser.add_argument("--interval", type=int, default=1000)
+    parser.add_argument("--snapshot-interval", type=int, default=60)
     args = parser.parse_args()
-    sys.exit(capture_windows(args.duration, args.interval))
+    sys.exit(capture_windows(args.duration, args.interval, args.snapshot_interval))

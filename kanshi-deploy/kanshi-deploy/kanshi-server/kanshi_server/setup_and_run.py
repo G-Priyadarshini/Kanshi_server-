@@ -433,6 +433,19 @@ def decrypt_report(emp_id, target_date, open_excel=True):
         print(f"No events found for {emp_id} on {target_date}")
         return 1
 
+    # DEBUG: Show all apps to find where time is going
+    all_apps = sorted(app_durations.items(), key=lambda x: x[1], reverse=True)
+    total_app_time = sum(dur for _, dur in all_apps)
+    
+    print(f"\n[DEBUG] App Duration Analysis:")
+    print(f"[DEBUG] Total Active Time (from AFK): {total_active:.0f} seconds = {_fmt_duration(total_active)}")
+    print(f"[DEBUG] Total App Time (sum): {total_app_time:.0f} seconds = {_fmt_duration(total_app_time)}")
+    print(f"[DEBUG] Discrepancy: {total_active - total_app_time:.0f} seconds = {_fmt_duration(abs(total_active - total_app_time))}")
+    print(f"[DEBUG] Number of app events: {len(all_apps)}")
+    print(f"[DEBUG] All apps (top 20):")
+    for i, (app, dur) in enumerate(all_apps[:20], 1):
+        print(f"  {i:2d}. {app:30s} -> {_fmt_duration(dur)}")
+    
     top_apps = sorted(app_durations.items(), key=lambda x: x[1], reverse=True)[:10]
     # Suppress all terminal output except errors
 
