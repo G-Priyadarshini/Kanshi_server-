@@ -273,19 +273,7 @@ def cmd_decrypt(emp_ids: list[str], start_date: str, end_date: str | None) -> in
             overall_rc = 1
             continue
 
-        try:
-            out = _build_excel(emp_id, reports)
-            print(f"\n[OK] Excel saved → {out}")
-            if platform.system() == "Windows":
-                os.startfile(str(out))
-            elif platform.system() == "Darwin":
-                import subprocess
-                subprocess.run(["open", str(out)])
-        except Exception as exc:
-            import traceback
-            print(f"[ERROR] Excel generation failed for {emp_id}: {exc}")
-            traceback.print_exc()
-            overall_rc = 1
+        print(f"[OK] Decrypted {len(reports)} reports for {emp_id}")
 
     return overall_rc
 

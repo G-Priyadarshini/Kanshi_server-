@@ -1196,18 +1196,43 @@ def main() -> int:
             import traceback
             traceback.print_exc()
             return 1
+    if "--send-night" in sys.argv:
+        # Run once each morning to send the previous day's full report.
+        import socket
+        emp_id = socket.gethostname()
+        t_date = (date.today() - timedelta(days=1)).isoformat()
+        s_url = sys.argv[2] if len(sys.argv) >= 3 else None
+        try:
+            return collect_and_send_report(emp_id, t_date, s_url)
+        except Exception as e:
+            print(f"ERROR in collect_and_send_report: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
+    if "--send-day" in sys.argv:
+        # Run once each night to send the current day's full report.
+        import socket
+        emp_id = socket.gethostname()
+        t_date = date.today().isoformat()
+        s_url = sys.argv[2] if len(sys.argv) >= 3 else None
+        try:
+            return collect_and_send_report(emp_id, t_date, s_url)
+        except Exception as e:
+            print(f"ERROR in collect_and_send_report: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
     if "--send-today" in sys.argv:
-        # Running before noon (e.g. 7 AM) → night shift just ended → send YESTERDAY
-        # Running after  noon (e.g. 11 PM) → day shift just ended  → send TODAY
+        # Backwards compatibility: keep the old logic for tasks still using --send-today.
         import socket
         from datetime import datetime as _dt
         emp_id = socket.gethostname()
-        now    = _dt.now()
+        now = _dt.now()
         if now.hour < 12:
             t_date = (date.today() - timedelta(days=1)).isoformat()
         else:
             t_date = date.today().isoformat()
-        s_url  = sys.argv[2] if len(sys.argv) >= 3 else None
+        s_url = sys.argv[2] if len(sys.argv) >= 3 else None
         try:
             return collect_and_send_report(emp_id, t_date, s_url)
         except Exception as e:

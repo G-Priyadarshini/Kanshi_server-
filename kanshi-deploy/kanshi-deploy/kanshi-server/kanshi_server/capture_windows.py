@@ -25,40 +25,29 @@ DB_PATH = DATA_DIR / "peewee-sqlite.v2.db"
 HOSTNAME = socket.gethostname()
 BUCKET_NAME = f"kanshi-watcher-window_{HOSTNAME}"
 
+# Load Windows API functions with proper Unicode (W) versions
+def _get_api_func(dll, func_name, argtypes, restype):
+    """Safely get and configure a Windows API function."""
+    try:
+        func = getattr(dll, func_name)
+        func.argtypes = argtypes
+        func.restype = restype
+        return func
+    except Exception as e:
+        logging.warning(f"Warning: Could not load {func_name}: {e}")
+        return None
+
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
 
-# ─── Define Windows API function signatures properly ────────────────────────
-# This is necessary for ctypes to properly call these functions
-try:
-    # GetWindowTextLengthW(HWND) -> int
-    user32.GetWindowTextLengthW.argtypes = [ctypes.c_void_p]
-    user32.GetWindowTextLengthW.restype = ctypes.c_int
-    
-    # GetWindowTextW(HWND, LPWSTR, int) -> int
-    user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
-    user32.GetWindowTextW.restype = ctypes.c_int
-    
-    # GetForegroundWindow() -> HWND
-    user32.GetForegroundWindow.argtypes = []
-    user32.GetForegroundWindow.restype = ctypes.c_void_p
-    
-    # GetWindowThreadProcessId(HWND, LPDWORD) -> DWORD
-    user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
-    user32.GetWindowThreadProcessId.restype = ctypes.c_ulong
-    
-    # Kernel32 functions
-    kernel32.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_bool, ctypes.c_ulong]
-    kernel32.OpenProcess.restype = ctypes.c_void_p
-    
-    kernel32.QueryFullProcessImageNameW.argtypes = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_ulong)]
-    kernel32.QueryFullProcessImageNameW.restype = ctypes.c_bool
-    
-    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
-    kernel32.CloseHandle.restype = ctypes.c_bool
-    
-except Exception as e:
-    logging.warning(f"Warning: Could not define all API signatures: {e}")
+# Set up Windows API function signatures
+GetWindowTextLengthW = _get_api_func(user32, 'GetWindowTextLengthW', [ctypes.c_void_p], ctypes.c_int)
+GetWindowTextW = _get_api_func(user32, 'GetWindowTextW', [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int], ctypes.c_int)
+GetForegroundWindow = _get_api_func(user32, 'GetForegroundWindow', [], ctypes.c_void_p)
+GetWindowThreadProcessId = _get_api_func(user32, 'GetWindowThreadProcessId', [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)], ctypes.c_ulong)
+OpenProcess = _get_api_func(kernel32, 'OpenProcess', [ctypes.c_ulong, ctypes.c_bool, ctypes.c_ulong], ctypes.c_void_p)
+QueryFullProcessImageNameW = _get_api_func(kernel32, 'QueryFullProcessImageNameW', [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_ulong)], ctypes.c_bool)
+CloseHandle = _get_api_func(kernel32, 'CloseHandle', [ctypes.c_void_p], ctypes.c_bool)
 
 def extract_app_name_from_title(title: str) -> str:
     """Extract app name from window title."""
@@ -96,21 +85,28 @@ def extract_app_name_from_title(title: str) -> str:
 def get_active_window():
     """Get title and app name of active window."""
     try:
-        hwnd = user32.GetForegroundWindow()
+        if not GetForegroundWindow:
+            return "unknown", ""
+            
+        hwnd = GetForegroundWindow()
         if not hwnd:
             return "unknown", ""
         
         # Get window title - use the correct API function
-        title_length = user32.GetWindowTextLengthW(hwnd)
-        if title_length > 0:
-            title_buffer = ctypes.create_unicode_buffer(title_length + 1)
-            user32.GetWindowTextW(hwnd, title_buffer, title_length + 1)
-            title = title_buffer.value or ""
-        else:
-            title = ""
+        title = ""
+        if GetWindowTextLengthW:
+            title_length = GetWindowTextLengthW(hwnd)
+            if title_length > 0:
+                title_buffer = ctypes.create_unicode_buffer(title_length + 1)
+                if GetWindowTextW:
+                    GetWindowTextW(hwnd, title_buffer, title_length + 1)
+                    title = title_buffer.value or ""
         
+        if not GetWindowThreadProcessId:
+            return extract_app_name_from_title(title), title
+            
         pid = ctypes.c_ulong()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         if not pid.value:
             # Fallback to title if no PID
             return extract_app_name_from_title(title), title
@@ -119,20 +115,26 @@ def get_active_window():
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         PROCESS_VM_READ = 0x0010
         access = PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ
-        handle = kernel32.OpenProcess(access, False, pid.value)
+        
+        if not OpenProcess:
+            return extract_app_name_from_title(title), title
+            
+        handle = OpenProcess(access, False, pid.value)
         if not handle:
             access = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ
-            handle = kernel32.OpenProcess(access, False, pid.value)
+            handle = OpenProcess(access, False, pid.value)
 
         app_name = "unknown"
         if handle:
             try:
                 exe_path = None
-                path_buffer = ctypes.create_unicode_buffer(260)
-                length = ctypes.c_ulong(len(path_buffer))
-                if kernel32.QueryFullProcessImageNameW(handle, 0, path_buffer, ctypes.byref(length)):
-                    exe_path = path_buffer.value
-                else:
+                if QueryFullProcessImageNameW:
+                    path_buffer = ctypes.create_unicode_buffer(260)
+                    length = ctypes.c_ulong(len(path_buffer))
+                    if QueryFullProcessImageNameW(handle, 0, path_buffer, ctypes.byref(length)):
+                        exe_path = path_buffer.value
+                
+                if not exe_path:
                     try:
                         psapi = ctypes.windll.psapi
                         if psapi.GetModuleFileNameExW(handle, None, path_buffer, len(path_buffer)):
@@ -158,8 +160,8 @@ def get_active_window():
                 if title:
                     app_name = extract_app_name_from_title(title)
             finally:
-                if handle:
-                    kernel32.CloseHandle(handle)
+                if handle and CloseHandle:
+                    CloseHandle(handle)
         else:
             # No handle - use title as fallback
             if title:
